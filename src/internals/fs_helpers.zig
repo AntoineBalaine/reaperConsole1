@@ -5,18 +5,14 @@ const Allocator = std.mem.Allocator;
 /// caller must free
 pub fn getControllerConfigPath(allocator: Allocator, controller_name: [*:0]const u8) ![]const u8 {
     const resourcePath = reaper.GetResourcePath();
-    const paths = [_][]const u8{ std.mem.span(resourcePath), "Data", "Perken", "Controllers", std.mem.span(controller_name) };
+    const paths = [_][]const u8{ std.mem.sliceTo(resourcePath, 0), "Data", "Perken", "Controllers", std.mem.span(controller_name) };
     const file_path = try std.fs.path.join(allocator, &paths);
     return file_path;
 }
 
 /// caller must free
 /// get length of file, allocate a buffer on length, and read into it.
-pub fn readFile(allocator: Allocator, path: []const u8) ![]u8 {
-
-    // Get the path
-    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const abs_path = try std.fs.realpath(path, &path_buffer);
+pub fn readFile(allocator: Allocator, abs_path: []const u8) ![]u8 {
 
     // Open the file
     const file = try std.fs.openFileAbsolute(abs_path, .{});

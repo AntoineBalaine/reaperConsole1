@@ -3,34 +3,33 @@ const reaper = @import("../reaper.zig").reaper;
 const Allocator = std.mem.Allocator;
 const fs_helpers = @import("fs_helpers.zig");
 const containsSubstring = @import("str_helpers.zig").containsSubstring;
-const parseConfig = @import("configLoad.zig").parseConfig;
+const parseConfig = @import("userPrefs.zig").parseConfig;
 const types = @import("types.zig");
 const UserSettings = types.UserSettings;
-const controllerConfigLoader = @import("ControllerConfigLoader.zig");
 const Controller = @import("controller.zig");
 const btnActions = @import("btnActions.zig");
+const c1 = @import("c1.zig");
 
 /// check that realearn can be found in `fxtags.ini`
-fn isRealearnInstalled(allocator: Allocator) !bool {
+fn isRealearnInstalled() !bool {
     const resourcePath = reaper.GetResourcePath();
-    const file_path = try std.fs.path.join(allocator, &[_][]const u8{ std.mem.span(resourcePath), "reaper-fxtags.ini" });
-    defer allocator.free(file_path);
-
-    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const abs_path = try std.fs.realpath(file_path, &path_buffer);
+    const mem_rpath = std.mem.sliceTo(resourcePath, 0);
+    var file_path: [std.fs.max_path_bytes]u8 = undefined;
+    @memcpy(&file_path, mem_rpath);
+    @memcpy(file_path[mem_rpath.len..], [1]u8{std.fs.path.sep} ++ "reaper-fxtags.ini");
 
     //Open the file
-    const file = try std.fs.openFileAbsolute(abs_path, .{});
+    const file = try std.fs.openFileAbsolute(&file_path, .{});
     defer file.close();
     var br = std.io.bufferedReader(file.reader());
     const r = br.reader();
 
     var buf: [1024]u8 = undefined;
 
-    const ref = "realearn";
-    const searchString = std.mem.sliceTo(ref, 0);
+    const ref: []const u8 = "realearn";
+    // const searchString = std.mem.span(ref, 0);
     while (try r.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-        if (containsSubstring(searchString, line[0.. :0])) {
+        if (containsSubstring(ref, line)) {
             return true;
         }
     }
@@ -54,14 +53,13 @@ fn isRealearnOnMonitoring() !bool {
         const search_str = "realearn";
         const t = 0x1000000;
         const x: u32 = @intCast(fxIndex);
-        const z = t + x;
+        const z: c_int = @intCast(t + x);
 
         var buf: [128]u8 = undefined;
-        var buffer: []u8 = &buf;
-        const has_fx_name = reaper.TrackFX_GetFXName(masterTrack, @intCast(z), @ptrCast(&buf[0]), buf.len);
+        const buffer: []u8 = &buf;
+        const has_fx_name = reaper.TrackFX_GetFXName(masterTrack, z, @ptrCast(&buf[0]), buf.len);
         if (has_fx_name) {
-            _ = std.ascii.lowerString(buffer, buffer);
-            if (containsSubstring(search_str, buffer[0.. :0])) {
+            if (containsSubstring(search_str, buffer)) {
                 return true;
             }
         }
@@ -99,7 +97,7 @@ var controller = Controller.c1;
 pub fn init(allocator: Allocator) !void {
     const userSettings = try parseConfig(allocator, "c1");
     _ = userSettings;
-    const isInstalled = try isRealearnInstalled(allocator);
+    const isInstalled = try isRealearnInstalled();
     if (!isInstalled) {
         return InitError.RealearnNotInstalled;
     }
@@ -109,7 +107,7 @@ pub fn init(allocator: Allocator) !void {
     } else {
         reaper.ShowConsoleMsg("Realearn found\n");
     }
-    const config_paths = try controllerConfigLoader.load(allocator, controller);
-    _ = config_paths;
+    // const config_paths = try controllerConfigLoader.getControllerPath(allocator, controller.name);
+    // _ = config_paths;
     _ = try btnActions.registerButtonActions(allocator, &controller);
 }

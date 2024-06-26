@@ -45,15 +45,15 @@ pub var Buttons = [_][]const u8{
 // const Modes = struct { main: .{}, fx_selection_display: .{}, settings_screen: .{} };
 
 const Module = struct {
-    name: [*:0]const u8,
-    params: ?[*:0]const u8,
+    name: []const u8,
+    params: ?[]const u8,
     idx: ?u8,
 };
 
 /// TODO include allocator in controller struct?
 pub const Controller = struct {
-    id: [*:0]const u8,
-    name: [*:0]const u8,
+    id: []const u8,
+    name: []const u8,
     modules: [5]Module,
     buttons: [][]const u8,
     // modes: Modes,
