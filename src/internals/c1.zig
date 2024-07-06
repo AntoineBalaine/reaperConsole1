@@ -27,11 +27,63 @@ const actions = struct {
     pub fn sel_dispShpOpts() void {}
     pub fn sel_dispCmpOpts() void {}
     pub fn sel_dispGateOpts() void {}
-    pub fn sel_slot() void {}
+    pub fn sel_slot(slotId: u8) void {
+        _ = slotId;
+    }
 };
 
-const c1 = struct {
-    .fx_ctrl = struct {
+pub const Mode = enum {
+    fx_ctrl,
+    fx_sel,
+};
+
+pub const ActionId = enum {
+    disp_on,
+    disp_mode,
+    shift,
+    filt_to_comp,
+    phase_inv,
+    preset,
+    pg_up,
+    pg_dn,
+    tr1,
+    tr2,
+    tr3,
+    tr4,
+    tr5,
+    tr6,
+    tr7,
+    tr8,
+    tr9,
+    tr10,
+    tr11,
+    tr12,
+    tr13,
+    tr14,
+    tr15,
+    tr16,
+    tr17,
+    tr18,
+    tr19,
+    tr20,
+    shape,
+    hard_gate,
+    eq,
+    hp_shape,
+    lp_shape,
+    comp,
+    tr_grp,
+    tr_copy,
+    order,
+    ext_sidechain,
+    solo,
+    mute,
+};
+
+pub const Btns = std.EnumArray(ActionId, ?*const fn () void);
+
+pub const controller = std.EnumArray(Mode, Btns).init(.{
+    .fx_ctrl = Btns.init(.{
         .disp_on = actions.toggleDisplay,
         .disp_mode = actions.cycleControllerMode,
         .shift = actions.toggleShift,
@@ -152,8 +204,8 @@ const c1 = struct {
         .ext_sidechain = null,
         .solo = actions.trackSolo,
         .mute = actions.trackMute,
-    },
-    .fx_selection_display = .{
+    }),
+    .fx_sel = Btns.init(.{
         .disp_on = null,
         .disp_mode = actions.cycleControllerMode,
         .shift = null,
@@ -274,21 +326,5 @@ const c1 = struct {
         .ext_sidechain = null,
         .solo = null,
         .mute = null,
-    },
-};
-
-test "re-use callbacks in struct" {
-    const dummy_actions = struct {
-        pub fn do_smth(prm: u8) u8 {
-            return prm;
-        }
-    };
-    const my_struct = .{
-        .tr1 = struct {
-            pub fn action() u8 {
-                return dummy_actions.do_smth(1);
-            }
-        }.action,
-    };
-    try std.testing.expectEqual(my_struct.tr1(), 1);
-}
+    }),
+});

@@ -1,12 +1,10 @@
 const std = @import("std");
-const ctrler = @import("controller.zig");
-const Controller = ctrler.Controller;
 const reaper = @import("../reaper.zig").reaper;
 const fs_helpers = @import("fs_helpers.zig");
 const Allocator = std.mem.Allocator;
 const types = @import("types.zig");
 const ini = @import("ini");
-const UserSettings = types.UserSettings;
+const UserSettings = @import("userPrefs.zig").UserSettings;
 
 // const Module = struct {
 //     name: []const u8,
@@ -55,24 +53,11 @@ const UserSettings = types.UserSettings;
 //     }
 // }
 
-pub fn getControllerPath(controller_name: []const u8) ![]const u8 {
-    var configDir: [std.fs.max_path_bytes]u8 = undefined;
-
+pub fn getControllerPath(controller_name: []const u8, allocator: Allocator) ![]const u8 {
     const resourcePath = reaper.GetResourcePath();
     const paths = [_][]const u8{ std.mem.sliceTo(resourcePath, 0), "Data", "Perken", "Controllers", controller_name };
 
-    var len: u8 = 0;
-    for (paths, 0..) |path, idx| {
-        @memcpy(configDir[len..], path);
-        if (idx < paths.len - 1) {
-            @memcpy(configDir[len + path.len ..], &[1]u8{std.fs.path.sep});
-        }
-        len += @intCast(path.len);
-    }
-
-    // const config = try readConfigFiles(allocator, configDir);
-    // _ = config;
-    return configDir;
+    return try std.fs.path.join(allocator, &paths);
 }
 
 const ConfigLoaderError = error{
