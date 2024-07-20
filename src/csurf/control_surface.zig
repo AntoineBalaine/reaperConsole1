@@ -5,17 +5,184 @@ const MediaTrack = Reaper.reaper.MediaTrack;
 const c_void = anyopaque;
 const State = @import("../internals/state.zig");
 const c = @cImport({
+    @cDefine("SWELL_PROVIDED_BY_APP", "");
     @cInclude("csurf/control_surface_wrapper.h");
+    @cInclude("../WDL/swell/swell-types.h");
+    @cInclude("../WDL/swell/swell-functions.h");
+    @cInclude("../WDL/win32_utf8.h");
+    @cInclude("../WDL/wdltypes.h");
+    @cInclude("resource.h");
 });
+const m = @import("midi_wrapper.zig");
+pub var g_hInst: reaper.HINSTANCE = undefined;
+fn sendDlgItemMessage(hwnd: c.HWND, idx: c_int, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) c.LRESULT {
+    // c.SendDlgItemMessage()
+    return c.SendMessage.?(c.GetDlgItem.?(hwnd, idx), msg, wparam, lparam);
+}
+
+fn dlgProc(hwndDlg: c.HWND, uMsg: c_uint, wParam: c.WPARAM, lParam: c.LPARAM) callconv(.C) c.WDL_DLGRET {
+    switch (uMsg) {
+        c.WM_INITDIALOG => {
+            var parms: [4]i32 = undefined;
+            parseParms(lParam, &parms);
+            c.ShowWindow.?(c.GetDlgItem.?(hwndDlg, c.IDC_EDIT1), c.SW_HIDE);
+            c.ShowWindow.?(c.GetDlgItem.?(hwndDlg, c.IDC_EDIT1_LBL), c.SW_HIDE);
+            c.ShowWindow.?(c.GetDlgItem.?(hwndDlg, c.IDC_EDIT2), c.SW_HIDE);
+            c.ShowWindow.?(c.GetDlgItem.?(hwndDlg, c.IDC_EDIT2_LBL), c.SW_HIDE);
+            c.ShowWindow.?(c.GetDlgItem.?(hwndDlg, c.IDC_EDIT2_LBL2), c.SW_HIDE);
+
+            // zig’s translateC can’t convert the type of WDL_UTF8_HookComboBox.
+            // That function’s a compat define when utf8 is disabled.
+            // fingers crossed, and hope that doesn’t happen.
+            // c.WDL_UTF8_HookComboBox(c.GetDlgItem(hwndDlg, c.IDC_COMBO2));
+            // c.WDL_UTF8_HookComboBox(c.GetDlgItem(hwndDlg, c.IDC_COMBO3));
+            var n = reaper.GetNumMIDIInputs();
+            const loc = reaper.LocalizeString("None", "csurf", 0);
+            var x = sendDlgItemMessage(hwndDlg, c.IDC_COMBO2, c.CB_ADDSTRING, 0, @as(c.LPARAM, @intCast(@intFromPtr(loc))));
+            _ = sendDlgItemMessage(hwndDlg, c.IDC_COMBO2, c.CB_SETITEMDATA, @as(c.WPARAM, @intCast(x)), -1);
+            x = sendDlgItemMessage(hwndDlg, c.IDC_COMBO3, c.CB_ADDSTRING, 0, @as(c.LPARAM, @intCast(@intFromPtr(loc))));
+            _ = sendDlgItemMessage(hwndDlg, c.IDC_COMBO3, c.CB_SETITEMDATA, @as(c.WPARAM, @intCast(x)), -1);
+            var cur: c_int = 0;
+            while (cur < n) : (cur += 1) {
+                var buf: [512]c_char = undefined;
+                if (reaper.GetMIDIInputName(cur, &buf, @sizeOf(@TypeOf(buf)))) {
+                    const a: c.WPARAM = @intCast(sendDlgItemMessage(hwndDlg, c.IDC_COMBO2, c.CB_ADDSTRING, @as(c.WPARAM, 0), @as(c.LPARAM, @intCast(@intFromPtr(&buf)))));
+                    _ = sendDlgItemMessage(hwndDlg, c.IDC_COMBO2, c.CB_SETITEMDATA, a, cur);
+
+                    if (cur == parms[2]) {
+                        _ = sendDlgItemMessage(hwndDlg, c.IDC_COMBO2, c.CB_SETCURSEL, a, 0);
+                    }
+                }
+            }
+
+            n = reaper.GetNumMIDIOutputs();
+            cur = 0;
+
+            while (cur < n) : (cur += 1) {
+                var buf: [512]c_char = undefined;
+                if (reaper.GetMIDIOutputName(@intCast(cur), &buf, @sizeOf(@TypeOf(buf)))) {
+                    const a: c.WPARAM = @intCast(sendDlgItemMessage(hwndDlg, c.IDC_COMBO3, c.CB_ADDSTRING, 0, @as(c.LPARAM, @intCast(@intFromPtr(&buf)))));
+                    _ = sendDlgItemMessage(hwndDlg, c.IDC_COMBO3, c.CB_SETITEMDATA, a, @as(c.LPARAM, @intCast(cur)));
+                    if (cur == parms[3]) {
+                        _ = sendDlgItemMessage(hwndDlg, c.IDC_COMBO3, c.CB_SETCURSEL, a, 0);
+                    }
+                }
+            }
+        },
+        c.WM_USER + 1024 => {
+            if (wParam > 1 and lParam != 0) {
+                var tmp: [512]u8 = undefined;
+                var indev: isize = -1;
+                var outdev: isize = -1;
+                var r = sendDlgItemMessage(hwndDlg, c.IDC_COMBO2, c.CB_GETCURSEL, 0, 0);
+                if (r != c.CB_ERR) indev = sendDlgItemMessage(hwndDlg, c.IDC_COMBO2, c.CB_GETITEMDATA, @as(c.WPARAM, @intCast(r)), 0);
+
+                r = sendDlgItemMessage(hwndDlg, c.IDC_COMBO3, c.CB_GETCURSEL, 0, 0);
+                if (r != c.CB_ERR) outdev = sendDlgItemMessage(hwndDlg, c.IDC_COMBO3, c.CB_GETITEMDATA, @as(c.WPARAM, @intCast(r)), 0);
+
+                const buffer: []u8 = &tmp;
+                _ = std.fmt.bufPrint(buffer, "0 0 {d} {d}", .{ indev, outdev }) catch {};
+                _ = c.lstrcpyn.?(lParam, &tmp, @as(c_int, @intCast(wParam)));
+            }
+        },
+        else => {},
+    }
+    return 0;
+}
+
+fn makeIntResource(x: anytype) [*c]const u8 {
+    return @ptrFromInt(@as(u32, @intCast(x)));
+}
+
+pub fn configFunc(type_string: [*c]const u8, parent: c.HWND, initConfigString: [*c]const u8) callconv(.C) c.HWND {
+    std.debug.print("configFunc\n", .{});
+    _ = type_string;
+    const cast: c.LPARAM = @intCast(@intFromPtr(initConfigString));
+    // const cast: c.LPARAM = @intCast(initConfigString);
+
+    return c.SWELL_CreateDialog.?(c.SWELL_curmodule_dialogresource_head, makeIntResource(c.IDD_SURFACEEDIT_MCU), parent, &dlgProc, cast);
+    // return c.CreateDialogParam.?(g_hInst, makeIntResource(c.IDD_SURFACEEDIT_MCU), parent, &dlgProc, cast);
+}
+
+fn parseParms(str: [*c]const c_char, parms: *[4]i32) void {
+    parms[0] = 0;
+    parms[1] = 9;
+    parms[2] = -1;
+    parms[3] = -1;
+
+    const cast: [*:0]const u8 = @ptrCast(str);
+    var iterator = std.mem.splitScalar(u8, std.mem.span(cast), ' ');
+    var i: u8 = 0;
+    while (iterator.next()) |val| {
+        if (!std.mem.eql(u8, "", val) and i < 4) {
+            i += 1;
+            parms[i] = std.fmt.parseInt(i32, val, 10) catch -1;
+        }
+    }
+}
+
+fn createFunc(type_string: [*c]const c_char, configString: [*c]const c_char, errStats: *c_int) callconv(.C) c.C_ControlSurface {
+    std.debug.print("createFunc\n", .{});
+    _ = type_string;
+    var parms: [4]i32 = undefined;
+    parseParms(configString, &parms);
+    const myCsurf: c.C_ControlSurface = init(parms[2], parms[3], errStats);
+    return myCsurf;
+}
+
+/// reaper_plugin.reaper_csurf_reg_t
+const reaper_csurf_reg_t = extern struct {
+    //
+    type_string: [*:0]const u8,
+    desc_string: [*:0]const u8,
+    IReaperControlSurface: *const fn (type_string: [*:0]const c_char, configString: [*:0]const c_char, errStats: *c_int) callconv(.C) c.C_ControlSurface,
+    ShowConfig: *const fn (type_string: [*c]const u8, parent: c.HWND, initConfigString: [*c]const u8) callconv(.C) c.HWND,
+};
+
+pub const c1_reg = reaper_csurf_reg_t{
+    .type_string = "Console1",
+    .desc_string = "Softube Console1",
+    .IReaperControlSurface = &createFunc,
+    .ShowConfig = &configFunc,
+};
+
+var m_midiin: ?reaper.midi_Input = null;
+var m_midiout: ?reaper.midi_Output = null;
 
 var state: *State = undefined;
-pub fn init(initState: *State) c.C_ControlSurface {
-    state = initState;
+pub fn init(indev: c_int, outdev: c_int, errStats: ?*c_int) c.C_ControlSurface {
+    m_midiin = if (indev >= 0) reaper.CreateMIDIInput(indev) else null;
+    // TODO : investigate whether the midioutput needs to be threaded
+    // (this was the case in the faderport example)
+    m_midiout = if (outdev >= 0) reaper.CreateMIDIOutput(outdev, false, null) else null;
+    if (errStats) |errstats| {
+        if (indev >= 0 and m_midiin == null) errstats.* |= 1;
+        if (outdev >= 0 and m_midiout == null) errstats.* |= 2;
+    }
+    if (m_midiin) |midi_in| {
+        m.MidiIn_start(midi_in);
+    }
+    if (m_midiout) |midi_out| {
+        m.MidiOut_Send(midi_out, 0xb0, 0x00, 0x06, -1);
+        m.MidiOut_Send(midi_out, 0xb0, 0x20, 0x27, -1);
+        for (0..0x30) |x| { // lights out
+            m.MidiOut_Send(midi_out, 0xa0, @as(u8, @intCast(x)), 0x00, -1);
+        }
+        m.MidiOut_Send(midi_out, 0x91, 0x00, 0x64, -1);
+    }
     const myCsurf: c.C_ControlSurface = c.ControlSurface_Create();
     return myCsurf;
 }
 
 pub fn deinit(csurf: c.C_ControlSurface) void {
+    if (m_midiout) |midiOut| {
+        for (0..0x30) |x| { // lights out
+            m.MidiOut_Send(midiOut, 0xa0, @as(u8, @intCast(x)), 0x00, -1);
+        }
+    }
+
+    c.DELETE_ASYNC(m_midiout.?);
+    c.DELETE_ASYNC(m_midiin.?);
     c.ControlSurface_Destroy(csurf);
 }
 
@@ -45,7 +212,7 @@ export fn zRun() callconv(.C) void {
 }
 export fn zSetTrackListChange() callconv(.C) void {
     std.debug.print("SetTrackListChange\n", .{});
-    state.*.csurfCB();
+    // state.*.csurfCB();
 }
 export fn zSetSurfaceVolume(trackid: *MediaTrack, volume: f64) callconv(.C) void {
     _ = trackid;
@@ -107,8 +274,9 @@ export fn zResetCachedVolPanStates() callconv(.C) void {
     // std.debug.print("ResetCachedVolPanStates\n", .{});
 }
 export fn zOnTrackSelection(trackid: MediaTrack) callconv(.C) void {
+    _ = trackid;
     std.debug.print("OnTrackSelection\n", .{});
-    state.handleNewTrack(trackid);
+    // state.handleNewTrack(trackid);
 }
 export fn zIsKeyDown(key: c_int) callconv(.C) bool {
     _ = key;
@@ -148,4 +316,16 @@ export fn zExtended(call: c_int, parm1: ?*c_void, parm2: ?*c_void, parm3: ?*c_vo
         else => unreachable,
     }
     return 0;
+}
+
+test parseParms {
+    const expect = std.testing.expect;
+
+    var parms: [4]c_int = undefined;
+    var my_arr = [5]c_char{ '1', ' ', '2', ' ', '3' };
+    const str: [*]const c_char = &my_arr;
+    try parseParms(str, &parms);
+    try expect(parms[1] == 1);
+    try expect(parms[2] == 2);
+    // try expect(str[3] == 3);
 }

@@ -314,11 +314,11 @@ pub const reaper = struct { // @import("reaper");
 
     /// CreateMIDIInput
     /// Can only reliably create midi access for devices not already opened in prefs/MIDI, suitable for control surfaces etc.
-    pub var CreateMIDIInput: *fn (dev: c_int) callconv(.C) *midi_Input = undefined;
+    pub var CreateMIDIInput: *fn (dev: c_int) callconv(.C) midi_Input = undefined;
 
     /// CreateMIDIOutput
     /// Can only reliably create midi access for devices not already opened in prefs/MIDI, suitable for control surfaces etc. If streamMode is set, msoffset100 points to a persistent variable that can change and reflects added delay to output in 100ths of a millisecond.
-    pub var CreateMIDIOutput: *fn (dev: c_int, streamMode: bool, msoffset100: *c_int) callconv(.C) *midi_Output = undefined;
+    pub var CreateMIDIOutput: *fn (dev: c_int, streamMode: bool, msoffset100: ?*c_int) callconv(.C) midi_Output = undefined;
 
     /// CreateNewMIDIItemInProj
     /// Create a new MIDI media item, containing no MIDI events. Time is in seconds unless qn is set.
@@ -1202,11 +1202,11 @@ pub const reaper = struct { // @import("reaper");
 
     /// GetMIDIInputName
     /// returns true if device present
-    pub var GetMIDIInputName: *fn (dev: c_int, nameout: *c_char, nameout_sz: c_int) callconv(.C) bool = undefined;
+    pub var GetMIDIInputName: *fn (dev: c_int, nameout: [*]c_char, nameout_sz: c_int) callconv(.C) bool = undefined;
 
     /// GetMIDIOutputName
     /// returns true if device present
-    pub var GetMIDIOutputName: *fn (dev: c_int, nameout: *c_char, nameout_sz: c_int) callconv(.C) bool = undefined;
+    pub var GetMIDIOutputName: *fn (dev: c_int, nameout: [*]c_char, nameout_sz: c_int) callconv(.C) bool = undefined;
 
     /// GetMixerScroll
     /// Get the leftmost track visible in the mixer

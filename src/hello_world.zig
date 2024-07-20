@@ -18,7 +18,7 @@ var state: State = undefined;
 var action_id: c_int = undefined;
 var myCsurf: c.C_ControlSurface = undefined;
 
-var gpa_int = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 999, .verbose_log = true }){};
+var gpa_int = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 999, .verbose_log = false }){};
 const gpa = gpa_int.allocator();
 
 /// retrieve user settings
@@ -37,7 +37,7 @@ fn init() !void {
 
 fn deinit() void {
     std.debug.print("Deinit\n", .{});
-    control_surface.deinit(myCsurf);
+    // control_surface.deinit(myCsurf);
     try state.deinit(gpa);
     const deinit_status = gpa_int.deinit();
     if (deinit_status == .leak) {
@@ -46,25 +46,31 @@ fn deinit() void {
 }
 
 export fn ReaperPluginEntry(instance: reaper.HINSTANCE, rec: ?*reaper.plugin_info_t) c_int {
-    _ = instance;
+    std.debug.print("entry\n", .{});
 
     if (rec == null or !reaper.init(rec.?)) {
         deinit();
+        std.debug.print("deinit\n", .{});
         return 0;
     }
 
-    init() catch {
-        return 0;
-    };
+    control_surface.g_hInst = instance;
+    // init() catch {
+    //     std.debug.print("catch\n", .{});
+    //     return 0;
+    // };
+    std.debug.print("init\n", .{});
 
     // Define the opaque struct to represent IReaperControlSurface
-    myCsurf = control_surface.init(&state);
-    if (myCsurf == null) {
-        std.debug.print("Failed to create fake csurf\n", .{});
-        deinit();
-        return 0;
-    }
-    _ = reaper.plugin_register("csurf_inst", myCsurf.?);
+    // myCsurf = control_surface.init();
+    // if (myCsurf == null) {
+    //     std.debug.print("Failed to create fake csurf\n", .{});
+    //     deinit();
+    //     return 0;
+    // }
+    // _ = reaper.plugin_register("csurf_inst", myCsurf.?);
+
+    _ = reaper.plugin_register("csurf", @constCast(@ptrCast(&control_surface.c1_reg)));
 
     // const action = reaper.custom_action_register_t{ .section = 0, .id_str = "REAIMGUI_ZIG", .name = "ReaImGui Zig example" };
     // action_id = reaper.plugin_register("custom_action", @constCast(@ptrCast(&action)));
