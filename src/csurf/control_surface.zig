@@ -12,19 +12,24 @@ const c = @cImport({
     @cInclude("../WDL/win32_utf8.h");
     @cInclude("../WDL/wdltypes.h");
     @cInclude("resource.h");
-    @cInclude("../WDL/win32_utf8.h");
+    @cInclude("csurf/midi_wrapper.h");
 });
 
-const m = @import("midi_wrapper.zig");
+const MIDI_eventlist = @import("../reaper.zig").reaper.MIDI_eventlist;
+
 pub var g_hInst: reaper.HINSTANCE = undefined;
 
 var m_midi_in_dev: ?c_int = null;
 var m_midi_out_dev: ?c_int = null;
-var @"midi_in?": ?reaper.midi_Input = null;
-var @"midi_out?": ?reaper.midi_Output = null;
+var m_midiin: ?*reaper.midi_Input = null;
+var m_midiout: ?reaper.midi_Output = null;
 var m_vol_lastpos: i32 = -1000;
 var m_bank_offset: i32 = 0;
 var tmp: [512]u8 = undefined;
+
+var m_button_states: i32 = 0;
+
+var m_buttonstate_lastrun: c.DWORD = 0;
 
 var state: *State = undefined;
 // TODO : investigate whether the midioutput needs to be threaded
@@ -32,53 +37,99 @@ var state: *State = undefined;
 pub fn init(indev: c_int, outdev: c_int, errStats: ?*c_int) c.C_ControlSurface {
     m_midi_in_dev = indev;
     m_midi_out_dev = outdev;
-    @"midi_in?" = if (indev >= 0) reaper.CreateMIDIInput(indev) else null;
-    @"midi_out?" = if (outdev >= 0) reaper.CreateMIDIOutput(outdev, false, null) else null;
+    m_midiin = if (indev >= 0) reaper.CreateMIDIInput(indev) else null;
+    m_midiout = if (outdev >= 0) reaper.CreateMIDIOutput(outdev, false, null) else null;
+    if (m_midiin == null or m_midiout == null) {
+        std.debug.print("in: {any}, out: {any}\n", .{ m_midiin, m_midiout });
+    }
     if (errStats) |errstats| {
-        if (indev >= 0 and @"midi_in?" == null) errstats.* |= 1;
-        if (outdev >= 0 and @"midi_out?" == null) errstats.* |= 2;
+        if (indev >= 0 and m_midiin == null) errstats.* |= 1;
+        if (outdev >= 0 and m_midiout == null) errstats.* |= 2;
     }
-    if (@"midi_in?") |midi_in| {
-        m.MidiIn_start(midi_in);
+    if (m_midiin) |midi_in| {
+        c.MidiIn_start(midi_in);
+        c.MidiIn_start(midi_in);
     }
-    if (@"midi_out?") |midi_out| {
-        m.MidiOut_Send(midi_out, 0xb0, 0x00, 0x06, -1);
-        m.MidiOut_Send(midi_out, 0xb0, 0x20, 0x27, -1);
+    if (m_midiout) |midi_out| {
+        c.MidiOut_Send(midi_out, 0xb0, 0x00, 0x06, -1);
+        c.MidiOut_Send(midi_out, 0xb0, 0x20, 0x27, -1);
         for (0..0x30) |x| { // lights out
-            m.MidiOut_Send(midi_out, 0xa0, @as(u8, @intCast(x)), 0x00, -1);
+            c.MidiOut_Send(midi_out, 0xa0, @as(u8, @intCast(x)), 0x00, -1);
         }
-        m.MidiOut_Send(midi_out, 0x91, 0x00, 0x64, -1);
+        c.MidiOut_Send(midi_out, 0x91, 0x00, 0x64, -1);
     }
     const myCsurf: c.C_ControlSurface = c.ControlSurface_Create();
     return myCsurf;
 }
 
 pub fn deinit(csurf: c.C_ControlSurface) void {
-    if (@"midi_out?") |midi_out| {
+    if (m_midiout) |midi_out| {
         for (0..0x30) |x| { // lights out
-            m.MidiOut_Send(midi_out, 0xa0, @as(u8, @intCast(x)), 0x00, -1);
+            c.MidiOut_Send(midi_out, 0xa0, @as(u8, @intCast(x)), 0x00, -1);
         }
     }
 
-    c.DELETE_ASYNC(@"midi_out?".?);
-    c.DELETE_ASYNC(@"midi_in?".?);
+    c.DELETE_ASYNC(m_midiout.?);
+    c.DELETE_ASYNC(m_midiin.?);
     c.ControlSurface_Destroy(csurf);
 }
 
+pub fn OnMidiEvent(evt: *c.MIDI_event_t) void {
+    // The console only sends cc messages, so we know that the status is always going to be 0x8,
+    // except when the message is a running status (i.e. the knobs are turned faster).
+    // In the case of running status, we do need to read the status byte to figure out which control is being touched.
+    // 0xb0 0x1f 0x7f 0x0
+    // ^    ^    ^    ^
+    // |    |    |    useless for our purposes
+    // |    |    value
+    // |    cc number
+    // status "cc message"
+    // 0x6b 0x46 0x0 0xdd
+    // ^    ^    ^    ^
+    // |    |    |    I assume this is noise
+    // |    |    empty
+    // |    value
+    // cc number (byte is < 0x80, so this is running status)
+    const msg = c.MIDI_event_message(evt);
+    const status = msg[0] & 0xf0;
+    const chan = msg[0] & 0x0f;
+    _ = chan;
+    const cc_id = if (status == 0x8) msg[1] else msg[0];
+    const val = if (status == 0x8) msg[2] else msg[1];
+
+    std.debug.print("0x{x}\t0x{x}\t0x{x}\n", .{ msg[0], cc_id, val });
+    // std.debug.print("\n", .{});
+    // if (m_midiout) m_midiout->Send(0xa0,3,evt->midi_message[2],-1);
+    // c.MidiOut_Send(m_midiout.?, status, data1, data2, -1);
+    // switch (evt.midi_message[0]){
+    //     0xb0 =>{
+    //         if (evt.midi_message[1]==0){
+    //             m_faderport_lasthw=evt.midi_message[2];
+    //         } else if (evt.midi_message[1]==0x20){
+    //             const tr = reaper.CSurf_TrackFromID(trid,false);
+    //         }
+    //     },
+    //     0xa0 =>{},
+    //     0xe0=>{},
+    //     else=>{}
+    // }
+}
+
 fn GetTypeString() callconv(.C) [*]const u8 {
-    return "Console1";
+    return "CONSOLE1";
 }
 
 fn GetDescString() callconv(.C) [*]const u8 {
     // example code does this weird thing:
     // descspace.SetFormatted(512,__LOCALIZE_VERFMT("PreSonus FaderPort (dev %d,%d)","csurf"),m_midi_in_dev,m_midi_out_dev);
-    return "Softube Console1";
+    return reaper.LocalizeString("Softube Console1", "csurf", 1);
 }
 
 fn GetConfigString() callconv(.C) [*]const u8 {
     const buffer: []u8 = &tmp;
     _ = std.fmt.bufPrint(buffer, "0 0 {d} {d}", .{ m_midi_in_dev.?, m_midi_out_dev.? }) catch {
-        return "";
+        std.debug.print("err: csurf console1 config string format\n", .{});
+        return "0 0 0 0";
     };
     return &tmp;
 }
@@ -89,16 +140,26 @@ export const zGetDescString = &GetDescString;
 export const zGetConfigString = &GetConfigString;
 
 export fn zCloseNoReset() callconv(.C) void {
-    if (@"midi_out?") |midi_out| {
-        m.MidiOut_Destroy(midi_out);
+    if (m_midiout) |midi_out| {
+        c.MidiOut_Destroy(midi_out);
     }
-    if (@"midi_in?") |midi_in| {
-        m.MidiIn_Destroy(midi_in);
+    if (m_midiin) |midi_in| {
+        c.MidiIn_Destroy(midi_in);
     }
-    @"midi_out?" = null;
-    @"midi_in?" = null;
+    m_midiout = null;
+    m_midiin = null;
 }
-export fn zRun() callconv(.C) void {}
+export fn zRun() callconv(.C) void {
+    if (m_midiin) |midi_in| {
+        c.MidiIn_SwapBufs(midi_in, c.GetTickCount.?());
+        const list = c.MidiIn_GetReadBuf(midi_in);
+        var l: c_int = 0;
+        c.MidiOut_Send(m_midiout.?, 0xb, 0x34, 0x7f, -1);
+        while (c.MDEvtLs_EnumItems(list, &l)) |evts| : (l += 1) {
+            OnMidiEvent(evts);
+        }
+    }
+}
 export fn zSetTrackListChange() callconv(.C) void {}
 export fn zSetSurfaceVolume(trackid: *MediaTrack, volume: f64) callconv(.C) void {
     // QUESTION: what's MCP view in csurf ?
@@ -106,14 +167,14 @@ export fn zSetSurfaceVolume(trackid: *MediaTrack, volume: f64) callconv(.C) void
     const oid = reaper.CSurf_TrackToID(trackid, false);
     const id = oid - m_bank_offset;
 
-    if (@"midi_out?" != null and id == 0) {
+    if (m_midiout != null and id == 0) {
         var volint = volToInt14(volume);
         // QUESTION: What happens in cpp when you divid an int by 16 ?
         volint = @divTrunc(volint, 16);
         if (m_vol_lastpos != volint) {
             m_vol_lastpos = volint;
-            m.MidiOut_Send(@"midi_out?".?, 0xb0, 0x00, @as(u8, @intCast(volint >> 7)), -1);
-            m.MidiOut_Send(@"midi_out?".?, 0xb0, 0x20, @as(u8, @intCast(volint & 127)), -1);
+            c.MidiOut_Send(m_midiout.?, 0xb0, 0x00, @as(u8, @intCast(volint >> 7)), -1);
+            c.MidiOut_Send(m_midiout.?, 0xb0, 0x20, @as(u8, @intCast(volint & 127)), -1);
         }
     }
 }
@@ -246,7 +307,7 @@ fn dlgProc(hwndDlg: c.HWND, uMsg: c_uint, wParam: c.WPARAM, lParam: c.LPARAM) ca
     switch (uMsg) {
         c.WM_INITDIALOG => {
             var parms: [4]i32 = undefined;
-            parseParms(lParam, &parms);
+            parseParms(@ptrFromInt(@as(usize, @intCast(lParam))), &parms);
             c.ShowWindow.?(c.GetDlgItem.?(hwndDlg, c.IDC_EDIT1), c.SW_HIDE);
             c.ShowWindow.?(c.GetDlgItem.?(hwndDlg, c.IDC_EDIT1_LBL), c.SW_HIDE);
             c.ShowWindow.?(c.GetDlgItem.?(hwndDlg, c.IDC_EDIT2), c.SW_HIDE);
@@ -331,13 +392,14 @@ fn parseParms(str: [*c]const c_char, parms: *[4]i32) void {
     parms[2] = -1;
     parms[3] = -1;
 
-    const cast: [*:0]const u8 = @ptrCast(str);
-    var iterator = std.mem.splitScalar(u8, std.mem.span(cast), ' ');
-    var i: u8 = 0;
+    var iterator = std.mem.splitScalar(u8, std.mem.span(@as([*:0]const u8, @ptrCast(str))), ' ');
+    var x: u8 = 0;
     while (iterator.next()) |val| {
-        if (!std.mem.eql(u8, "", val) and i < 4) {
-            i += 1;
-            parms[i] = std.fmt.parseInt(i32, val, 10) catch -1;
+        if (!std.mem.eql(u8, "", val) and x < 4) {
+            const parsed = std.fmt.parseInt(i32, val, 10) catch -1;
+            parms[x] = parsed;
+            // tb determined, is this correct? It looks like the cpp version starts at 1
+            x += 1;
         }
     }
 }

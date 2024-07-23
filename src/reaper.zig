@@ -22,7 +22,31 @@ pub const reaper = struct { // @import("reaper");
     pub const LICE_IFont = *opaque {};
     pub const LICE_pixel = *opaque {};
     pub const LICE_pixel_chan = *opaque {};
-    pub const MIDI_event_t = *opaque {};
+    // pub const MIDI_event_t = *opaque {};
+
+    pub const MIDI_event_t = extern struct {
+        frame_offset: c_int,
+        size: c_int,
+        midi_message: [4]u8,
+        pub fn is_note(self: *MIDI_event_t) bool {
+            return (self.midi_message[0] & 0xe0) == 0x80;
+        }
+        pub fn is_note_on(self: *MIDI_event_t) bool {
+            return (self.midi_message[0] & 0xf0) == 0x90 and self.midi_message[2];
+        }
+        pub fn is_note_off(self: *MIDI_event_t) bool {
+            switch (self.midi_message[0] & 0xf0) {
+                0x80 => return true,
+                0x90 => return self.midi_message[2] == 0,
+            }
+            return false;
+        }
+        pub const cc = enum(u8) {
+            CC_ALL_SOUND_OFF = 120,
+            CC_ALL_NOTES_OFF = 123,
+            CC_EOF_INDICATOR = 123, // same as CC_ALL_NOTES_OFF
+        };
+    };
     pub const MIDI_eventlist = *opaque {};
     pub const MSG = *opaque {};
     pub const MediaItem = *opaque {};
@@ -47,7 +71,7 @@ pub const reaper = struct { // @import("reaper");
     pub const audio_hook_register_t = *opaque {};
     pub const gfx = *opaque {};
     pub const joystick_device = *opaque {};
-    pub const midi_Input = *opaque {};
+    pub const midi_Input = opaque {};
     pub const midi_Output = *opaque {};
     pub const preview_register_t = *opaque {};
     pub const screensetNewCallbackFunc = *opaque {};
@@ -314,7 +338,7 @@ pub const reaper = struct { // @import("reaper");
 
     /// CreateMIDIInput
     /// Can only reliably create midi access for devices not already opened in prefs/MIDI, suitable for control surfaces etc.
-    pub var CreateMIDIInput: *fn (dev: c_int) callconv(.C) midi_Input = undefined;
+    pub var CreateMIDIInput: *fn (dev: c_int) callconv(.C) *midi_Input = undefined;
 
     /// CreateMIDIOutput
     /// Can only reliably create midi access for devices not already opened in prefs/MIDI, suitable for control surfaces etc. If streamMode is set, msoffset100 points to a persistent variable that can change and reflects added delay to output in 100ths of a millisecond.
@@ -494,7 +518,7 @@ pub const reaper = struct { // @import("reaper");
     pub var CSurf_SetTrackListChange: *fn () callconv(.C) void = undefined;
 
     /// CSurf_TrackFromID
-    pub var CSurf_TrackFromID: *fn (idx: c_int, mcpView: bool) callconv(.C) *MediaTrack = undefined;
+    pub var CSurf_TrackFromID: *fn (idx: c_int, mcpView: bool) callconv(.C) MediaTrack = undefined;
 
     /// CSurf_TrackToID
     pub var CSurf_TrackToID: *fn (track: *MediaTrack, mcpView: bool) callconv(.C) c_int = undefined;
