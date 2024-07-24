@@ -72,7 +72,7 @@ pub const reaper = struct { // @import("reaper");
     pub const gfx = *opaque {};
     pub const joystick_device = *opaque {};
     pub const midi_Input = opaque {};
-    pub const midi_Output = *opaque {};
+    pub const midi_Output = *anyopaque;
     pub const preview_register_t = *opaque {};
     pub const screensetNewCallbackFunc = *opaque {};
     pub const size_t = *opaque {};
@@ -521,7 +521,7 @@ pub const reaper = struct { // @import("reaper");
     pub var CSurf_TrackFromID: *fn (idx: c_int, mcpView: bool) callconv(.C) MediaTrack = undefined;
 
     /// CSurf_TrackToID
-    pub var CSurf_TrackToID: *fn (track: *MediaTrack, mcpView: bool) callconv(.C) c_int = undefined;
+    pub var CSurf_TrackToID: *fn (track: MediaTrack, mcpView: bool) callconv(.C) c_int = undefined;
 
     /// DB2SLIDER
     pub var DB2SLIDER: *fn (x: f64) callconv(.C) f64 = undefined;
@@ -3758,7 +3758,7 @@ pub const reaper = struct { // @import("reaper");
 
     /// Track_GetPeakInfo
     /// Returns peak meter value (1.0=+0dB, 0.0=-inf) for channel. If channel==1024 or channel==1025, returns loudness values if this is the master track or this track's VU meters are set to display loudness.
-    pub var Track_GetPeakInfo: *fn (track: *MediaTrack, channel: c_int) callconv(.C) f64 = undefined;
+    pub var Track_GetPeakInfo: *fn (track: MediaTrack, channel: c_int) callconv(.C) f64 = undefined;
 
     /// TrackCtl_SetToolTip
     /// displays tooltip at location, or removes if empty string
