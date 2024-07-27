@@ -2,6 +2,7 @@ const std = @import("std");
 const reaper = @import("../reaper.zig").reaper;
 const config = @import("config.zig");
 const ModulesList = config.ModulesList;
+const FxMap = @import("mappings.zig").FxMap;
 const CONTROLLER_NAME = "PRKN_C1";
 
 const ModulesOrder = union(enum) {
@@ -10,7 +11,7 @@ const ModulesOrder = union(enum) {
     @"S-EQ-C",
 };
 
-const ModuleCheck = std.EnumArray(ModulesList, std.meta.Tuple(&.{ bool, u8 }));
+pub const ModuleCheck = std.EnumArray(ModulesList, std.meta.Tuple(&.{ bool, u8 }));
 const TrckErr = error{ fxAddFail, fxRenameFail, moduleFindFail, fxFindNameFail, fxHasNoName, enumConvertFail };
 // TODO: this is in top scope because I couldn't figure out how to pass the buffer as a fn param. the constness of fn params doesn't let me use the buffer
 var buf: [255:0]u8 = undefined;
@@ -18,6 +19,8 @@ var buf: [255:0]u8 = undefined;
 pub const Track = struct {
     ptr: ?reaper.MediaTrack,
     order: ModulesOrder = .@"S-EQ-C",
+    fxMap: FxMap = FxMap.init(),
+
     pub fn init(trackPtr: reaper.MediaTrack) Track {
         const track: Track = .{
             .ptr = trackPtr,
@@ -39,7 +42,12 @@ pub const Track = struct {
     }
 
     /// if container_idx is provided, then load the chain into it.
-    fn loadDefaultChain(self: *Track, container_idx: ?c_int, defaults: *std.EnumArray(ModulesList, [:0]const u8)) !void {
+    fn loadDefaultChain(
+        self: *Track,
+        container_idx: ?c_int,
+        defaults: *std.EnumArray(ModulesList, [:0]const u8),
+        mappings: *config.MapStore,
+    ) !void {
         var cont_idx: c_int = undefined;
         if (container_idx) |idx| {
             cont_idx = idx;
@@ -59,9 +67,10 @@ pub const Track = struct {
         var iterator = defaults.iterator();
         var idx: u8 = 0;
         while (iterator.next()) |field| : (idx += 1) {
+            const fxName = defaults.get(field.key);
             const fx_added = reaper.TrackFX_AddByName(
                 self.ptr.?,
-                @as([*:0]const u8, defaults.get(field.key)),
+                @as([*:0]const u8, fxName),
                 false,
                 self.getSubContainerIdx(
                     idx + 1, // make it 1-based
@@ -70,6 +79,14 @@ pub const Track = struct {
             );
             if (fx_added == -1) {
                 return TrckErr.fxAddFail;
+            } else {
+                switch (field.key) {
+                    .INPUT => self.fxMap.INPUT = .{ idx, mappings.get(field.key, fxName).INPUT },
+                    .GATE => self.fxMap.GATE = .{ idx, mappings.get(field.key, fxName).GATE },
+                    .EQ => self.fxMap.EQ = .{ idx, mappings.get(field.key, fxName).EQ },
+                    .COMP => self.fxMap.COMP = .{ idx, mappings.get(field.key, fxName).COMP },
+                    .OUTPT => self.fxMap.OUTPT = .{ idx, mappings.get(field.key, fxName).OUTPT },
+                }
             }
         }
     }
@@ -79,7 +96,7 @@ pub const Track = struct {
         EQ: u8 = 0,
         GATE: u8 = 0,
         COMP: u8 = 0,
-        SAT: u8 = 0,
+        OUTPT: u8 = 0,
     };
 
     pub fn addMissingModules(
@@ -121,11 +138,13 @@ pub const Track = struct {
             };
 
             switch (moduleType) {
-                .INPUT => moduleCounter.INPUT += 1,
+                .INPUT => {
+                    moduleCounter.INPUT += 1;
+                },
                 .EQ => moduleCounter.EQ += 1,
                 .GATE => moduleCounter.GATE += 1,
                 .COMP => moduleCounter.COMP += 1,
-                .SAT => moduleCounter.SAT += 1,
+                .OUTPT => moduleCounter.OUTPT += 1,
             }
         }
         inline for (std.meta.fields(@TypeOf(moduleCounter))) |field| {
@@ -140,7 +159,7 @@ pub const Track = struct {
                     .EQ => 1,
                     .GATE => 2,
                     .COMP => 3,
-                    .SAT => 4,
+                    .OUTPT => 4,
                 };
 
                 const fx_added = reaper.TrackFX_AddByName(
@@ -159,19 +178,24 @@ pub const Track = struct {
         }
     }
 
-    pub fn checkTrackState(self: *Track, modules: std.StringHashMap(ModulesList), defaults: *std.EnumArray(ModulesList, [:0]const u8)) !void {
+    pub fn checkTrackState(
+        self: *Track,
+        modules: std.StringHashMap(ModulesList),
+        defaults: *std.EnumArray(ModulesList, [:0]const u8),
+        mappings: *config.MapStore,
+    ) !void {
         if (self.ptr == null) {
             return;
         }
         const tr = self.ptr.?;
         const container_idx = reaper.TrackFX_GetByName(tr, CONTROLLER_NAME, false);
         if (container_idx == -1) {
-            try self.loadDefaultChain(null, defaults);
+            try self.loadDefaultChain(null, defaults, mappings);
             return;
         }
         const rv = reaper.TrackFX_GetNamedConfigParm(tr, container_idx, "container_count", &buf, buf.len + 1);
         if (!rv) {
-            try self.loadDefaultChain(container_idx, defaults);
+            try self.loadDefaultChain(container_idx, defaults, mappings);
             return;
         }
         const count = try std.fmt.parseInt(i32, std.mem.span(@as([*:0]const u8, &buf)), 10);
@@ -189,7 +213,7 @@ pub const Track = struct {
             .EQ = .{ false, 1 },
             .GATE = .{ false, 2 },
             .COMP = .{ false, 3 },
-            .SAT = .{ false, 4 },
+            .OUTPT = .{ false, 4 },
         });
         var tmp_buf: [255:0]u8 = undefined;
 
@@ -218,7 +242,7 @@ pub const Track = struct {
             }
             const fxName = std.mem.span(@as([*:0]const u8, &buf));
 
-            const moduleType = modules.get(fxName) orelse {
+            const moduleType = modules.get(fxName) orelse { // no mapping available
                 continue;
             };
 
@@ -239,10 +263,12 @@ pub const Track = struct {
                             true,
                         );
                         // now that the fx indexes are all invalid, let's recurse.
-                        return try self.checkTrackState(modules, defaults);
+                        return try self.checkTrackState(modules, defaults, mappings);
+                    } else {
+                        self.fxMap.INPUT = .{ @as(u8, @intCast(idx)), mappings.get(.INPUT, fxName).INPUT };
                     }
                 },
-                .SAT => {
+                .OUTPT => {
                     if (idx != (count - 1)) {
                         reaper.TrackFX_CopyToTrack(
                             tr,
@@ -252,10 +278,14 @@ pub const Track = struct {
                             true,
                         );
                         // now that the fx indexes are all invalid, let's recurse.
-                        return try self.checkTrackState(modules, defaults);
+                        return try self.checkTrackState(modules, defaults, mappings);
+                    } else {
+                        self.fxMap.INPUT = .{ @as(u8, @intCast(idx)), mappings.get(.INPUT, fxName).INPUT };
                     }
                 },
-                else => {},
+                .GATE => self.fxMap.INPUT = .{ @as(u8, @intCast(idx)), mappings.get(.INPUT, fxName).INPUT },
+                .EQ => self.fxMap.INPUT = .{ @as(u8, @intCast(idx)), mappings.get(.INPUT, fxName).INPUT },
+                .COMP => self.fxMap.INPUT = .{ @as(u8, @intCast(idx)), mappings.get(.INPUT, fxName).INPUT },
             }
         }
 
@@ -272,6 +302,9 @@ pub const Track = struct {
                     self.getSubContainerIdx(cp + 1, container_idx + 1),
                     true,
                 );
+                // update indexes
+                moduleChecks.set(.GATE, .{ true, cp });
+                moduleChecks.set(.COMP, .{ true, gt });
             }
             self.order = .@"EQ-S-C";
         } else if (gt < cp and gt < eq) {
@@ -289,11 +322,40 @@ pub const Track = struct {
                 self.getSubContainerIdx(gt + 1, container_idx + 1),
                 true,
             );
+            // TODO: double check these results.
+            moduleChecks.set(.COMP, .{ true, gt });
+            moduleChecks.set(.GATE, .{ true, cp });
+
+            // update indexes
             if (eq < gt) {
                 self.order = .@"EQ-S-C";
             } else {
                 self.order = .@"S-C-EQ";
             }
         }
+        self.fxMap = fxMapFromModuleCheck(&moduleChecks);
     }
 };
+
+fn fxMapFromModuleCheck(moduleCheck: *ModuleCheck) FxMap {
+    var map: FxMap = .{
+        .COMP = undefined,
+        .EQ = undefined,
+        .INPUT = undefined,
+        .OUTPT = undefined,
+        .GATE = undefined,
+    };
+    var iterator = moduleCheck.iterator();
+    while (iterator.next()) |field| {
+        const module = field.key;
+        const idx = field.value[1];
+        switch (module) {
+            .COMP => map.COMP = .{ idx, null },
+            .EQ => map.EQ = .{ idx, null },
+            .INPUT => map.INPUT = .{ idx, null },
+            .OUTPT => map.OUTPT = .{ idx, null },
+            .GATE => map.GATE = .{ idx, null },
+        }
+    }
+    return map;
+}
