@@ -42,7 +42,7 @@ modulesList: Modules,
 /// Default FX associated with each module
 defaults: Defaults,
 mappings: MapStore,
-pub fn init(allocator: std.mem.Allocator, cntrlrPth: []const u8) !Conf {
+pub fn init(allocator: std.mem.Allocator, cntrlrPth: *const []const u8) !Conf {
     var self: Conf = .{
         .moduleSet = ModuleSet.init(.{
             .INPUT = std.StringHashMap(void).init(allocator),
@@ -57,7 +57,8 @@ pub fn init(allocator: std.mem.Allocator, cntrlrPth: []const u8) !Conf {
     };
 
     try self.readConf(allocator, cntrlrPth);
-    self.mappings = MapStore.init(allocator, &cntrlrPth, &self.defaults, &self.modulesList);
+
+    self.mappings = MapStore.init(allocator, cntrlrPth, &self.defaults, &self.modulesList);
 
     return self;
 }
@@ -99,8 +100,8 @@ pub fn deinit(self: *Conf, allocator: std.mem.Allocator) void {
 }
 
 /// Inits the struct, and reads the  `defaults.ini` and `modules.ini` into it.
-fn readConf(self: *Conf, allocator: std.mem.Allocator, cntrlrPth: []const u8) !void {
-    const defaultsPath = try std.fs.path.resolve(allocator, &.{ cntrlrPth, "./resources/defaults.ini" });
+fn readConf(self: *Conf, allocator: std.mem.Allocator, cntrlrPth: *const []const u8) !void {
+    const defaultsPath = try std.fs.path.resolve(allocator, &.{ cntrlrPth.*, "./resources/defaults.ini" });
     defer allocator.free(defaultsPath);
     const defaultsFile = try std.fs.openFileAbsolute(defaultsPath, .{});
     defer defaultsFile.close();
@@ -110,7 +111,7 @@ fn readConf(self: *Conf, allocator: std.mem.Allocator, cntrlrPth: []const u8) !v
 
     try readToEnumArray(&self.defaults, ModulesList, &defaultsParser, allocator, null);
 
-    const modulesPath = try std.fs.path.resolve(allocator, &.{ cntrlrPth, "./resources/modules.ini" });
+    const modulesPath = try std.fs.path.resolve(allocator, &.{ cntrlrPth.*, "./resources/modules.ini" });
     defer allocator.free(modulesPath);
     const modulesFile = try std.fs.openFileAbsolute(modulesPath, .{});
     defer modulesFile.close();
